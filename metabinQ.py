@@ -43,7 +43,7 @@ def options():
     
     # developer options
     parser.add_argument("-m", "--minseqlen", help = argparse.SUPPRESS, default=2500, type=check_minseqlen)
-    parser.add_argument("-w", "--windowsize", help = argparse.SUPPRESS, default=4000, type=check_windowsize)
+    parser.add_argument("-w", "--windowsize", help = argparse.SUPPRESS, default=5000, type=check_windowsize)
     args = parser.parse_args()
     return(args)
 
@@ -59,7 +59,7 @@ def split_fragment(sequence, n):
     Output - fragments
     """
     for i in range(0, len(sequence), n):
-        yield sequence[i:i + n]
+        yield str(sequence[i:i + n])
         
 
 def split_overlap(sequence, n, overlap):
@@ -87,9 +87,10 @@ def getContigTNF(path, min_length, windowsize, verbose=False):
     contigs = SeqIO.parse(path, 'fasta')
 
     contigs_tnf = []
-    for record in contigs:  
-        if len(record.seq) > min_length:
-            for fragment in split_overlap(record.seq, opt_len(record.seq, windowsize), 3):
+    for record in contigs:
+        seq = record.seq  
+        if len(seq) > min_length:
+            for fragment in split_fragment(seq, opt_len(seq, windowsize)):
                 tnf = tnCounter.count(fragment)
                 contigs_tnf.append(tnf)
         elif verbose:
@@ -120,9 +121,9 @@ def estimate_contamination(X, verbose):
     pca.fit(X)
     pca_data = pca.transform(X)
 
-    clust = OPTICS(min_samples=50, xi=0.001, min_cluster_size=.05)
+    clust = OPTICS(min_samples=50, xi=0.005, min_cluster_size=30)
     
-    if verbose:
+    if not verbose:
         with warnings.catch_warnings():
           warnings.simplefilter("ignore")
           clust.fit(pca_data[:,:20])
@@ -133,7 +134,6 @@ def estimate_contamination(X, verbose):
     if -1 in clusters:
         clusters.remove(-1)
     number_of_clusters = len(clusters)
-
     gmm = GaussianMixture(n_components=number_of_clusters, covariance_type='full')
 
     tmp = []
@@ -160,15 +160,15 @@ if __name__ == '__main__':
     args = options()
 
     if args.input and args.counts2disk:
-      tmpdir = "tmp"
-      if os.path.isdir(tmpdir):
-          if args.force:
-              print("Warning: tmp directory already exists and will be overwritten")
-          else: 
-            print("Error: count2disk option was set but tmp directory already exists".format(args.output))
-            exit(0)
-      else:
-        os.mkdir(tmpdir)
+        tmpdir = "tmp"
+        if os.path.isdir(tmpdir):
+            if args.force:
+                print("Warning: tmp directory already exists and will be overwritten")
+            else: 
+                print("Error: count2disk option was set but tmp directory already exists".format(args.output))
+                exit(0)
+        else:
+            os.mkdir(tmpdir)
    
     if os.path.isfile(args.output):
         if args.force:
@@ -181,42 +181,59 @@ if __name__ == '__main__':
 
     if args.input: # start from bins
 
-      for f in args.input:
-        if not os.path.isfile(f):
-            print("Warning: Could not find file {}, it will be skipped".format(f))
-            continue
-        basename = os.path.basename(os.path.splitext(f)[0])
+        for f in args.input:
+            if not os.path.isfile(f):
+                print("Warning: Could not find file {}, it will be skipped".format(f))
+                continue
         
-        # step1: calculate tetranculeotdie frequencies
-        tnf = getContigTNF(f, args.minseqlen, args.windowsize, args.verbose)
-        
-        if args.counts2disk: # write count files if wanted
-            fname = tmpdir + '/' + basename + ".csv"
-            write_tnf(tnf, fname)
-        
-        # step2: analysis
-        X = new_z(np.array(tnf))
-        if len(tnf) > 150:
-          contamination = estimate_contamination(X, args.verbose)
-          outputfile.write("{},{}\n".format(basename, contamination))
+            if args.verbose:
+                print("Process {}".format(f))
+            basename = os.path.basename(os.path.splitext(f)[0])
+            
+            # step1: calculate tetranculeotdie frequencies
+            if args.verbose:
+                print("Compute TNF...")
+            tnf = getContigTNF(f, args.minseqlen, args.windowsize, args.verbose)
+            
+            if args.counts2disk: # write count files if wanted
+                fname = tmpdir + '/' + basename + ".csv"
+                write_tnf(tnf, fname)
+            
+            # step2: analysis
+            if args.verbose:
+                print("Analysis quality...")
+            X = new_z(np.array(tnf))
+            if len(tnf) > 150:
+                contamination = estimate_contamination(X, args.verbose)
+                outputfile.write("{},{}\n".format(basename, contamination))
+            if args.verbose:
+                print("...Finished")
 
     else: # start from count files
 
-      for f in args.counts:
-        if not os.path.isfile(f):
-            print("Warning: Could not find file {}, it will be skipped".format(f))
-            continue
-        basename = os.path.basename(os.path.splitext(f)[0])
+        for f in args.counts:
+            if not os.path.isfile(f):
+                print("Warning: Could not find file {}, it will be skipped".format(f))
+                continue
+            if verbose:
+                print("Process {}".format(f))
+            basename = os.path.basename(os.path.splitext(f)[0])
 
-        # step1: read tetranculeotdie frequencies
-        data = pd.read_csv(f)
-        tnf = data.values
+            # step1: read tetranculeotdie frequencies
+            if args.verbose:
+                print("Read pre-computed TNF...")
+            data = pd.read_csv(f)
+            tnf = data.values
 
-        # step2: analysis
-        X = new_z(tnf)
-        if len(tnf) > 150:
-          contamination = estimate_contamination(X, args.verbose)
-          outputfile.write("{},{}\n".format(basename, contamination))
+            # step2: analysis
+            if args.verbose:
+                print("Analysis quality...")
+            X = new_z(tnf)
+            if len(tnf) > 150:
+                contamination = estimate_contamination(X, args.verbose)
+                outputfile.write("{},{}\n".format(basename, contamination))
+            if args.verbose:
+                print("...Finished")
 
     outputfile.close()
 
